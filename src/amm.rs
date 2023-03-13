@@ -1,5 +1,6 @@
 use scrypto::prelude::*;
 
+/// Trying to do a cross-blueprint call, but have no idea
 external_blueprint! {
     ConstantSumOption {
         fn instantiate_option(token_a_resource_address: ResourceAddress, token_b_resource_address: ResourceAddress,
@@ -20,12 +21,19 @@ external_component! {
 mod constant_sum_amm {
 
     struct ConstantSumAmm {
+/// Vault used to store first collateral-claim token which is minted through options  
         cct_a: Vault,
+/// Vault used to store second collateral-claim token which is minted through options 
         cct_b: Vault,
+/// Vault used to store bonded token which is minted through options 
         bt_per_second: Vault,
+/// Time for the maturity of amm
         duraton: i64,
+/// Vault for storing admin_badge
         lp_admin_badge_vault: Vault,
+/// swap fees
         fee: Decimal,
+/// LP token resource address
         lp_resource_address: ResourceAddress,
     }
 
@@ -33,8 +41,8 @@ mod constant_sum_amm {
         pub fn instantiate_amm_pool(cctoken_a: Bucket, cctoken_b: Bucket, _strike_price: Decimal, bt_per_second: Bucket,
         duration: i64, fee: Decimal, lp_initial_supply: Decimal,lp_name: String, lp_symbol: String) -> (ConstantSumAmmComponent, Bucket){
             
-          /*if strike_price >= dec!(1) {cctoken_b.amount() == cctoken_b.amount() / strike_price;}
-            else {cctoken_a.amount() == strike_price * cctoken_a.amount();}*/
+            if strike_price >= dec!(1) {cctoken_b.amount() == cctoken_b.amount() / strike_price;}
+            else {cctoken_a.amount() == strike_price * cctoken_a.amount();}
 
             assert!(fee < dec!(0) && fee > dec!(1), "Fee is invalid");
             
