@@ -21,19 +21,19 @@ external_component! {
 mod constant_sum_amm {
 
     struct ConstantSumAmm {
-/// Vault used to store first collateral-claim token which is minted through options  
+        /// Vault used to store first collateral-claim token which is minted through options  
         cct_a: Vault,
-/// Vault used to store second collateral-claim token which is minted through options 
+        /// Vault used to store second collateral-claim token which is minted through options 
         cct_b: Vault,
-/// Vault used to store bonded token which is minted through options 
+        /// Vault used to store bonded token which is minted through options 
         bt_per_second: Vault,
-/// Time for the maturity of amm
+        /// Time for the maturity of amm
         duraton: i64,
-/// Vault for storing admin_badge
+        /// Vault for storing admin_badge
         lp_admin_badge_vault: Vault,
-/// swap fees
+        /// swap fees
         fee: Decimal,
-/// LP token resource address
+        /// LP token resource address
         lp_resource_address: ResourceAddress,
     }
 
@@ -51,7 +51,8 @@ mod constant_sum_amm {
 
             // l is the marginal interest rate per second of bond token per total collateral claim tokens
             let _l: Decimal = bt_per_second.amount() / (cctoken_a.amount() + cctoken_b.amount());
-
+            
+            // admin badge used for minting and burning LP tokens
             let lp_admin_badge: Bucket = ResourceBuilder::new_fungible()
                 .metadata("Name", "Liquidity Provider Admin badge")
                 .metadata("Usage", "Needed to mint LP tokens")
