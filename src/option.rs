@@ -1,7 +1,6 @@
 use scrypto::radix_engine_interface::time::*;
 use scrypto::prelude::*;
 
-/// Trying to do a cross-blueprint call but dont know how to do 
 external_blueprint! {
     ConstantSumAmm {
         fn instantiate_amm_pool(cc_token_a: Bucket, cc_token_b: Bucket, _strike_price: Decimal, bt_per_second: Bucket,
@@ -18,110 +17,102 @@ external_component! {
 #[blueprint]
 mod option_implementation {
     struct ConstantSumOption {
-        /// Vault where input token is locked 
-        lock_token_vault: Vault,
         strike_price: Decimal,
-        mint_badge_vault: Vault,
-        /// Resource address of bonded token
-        bt_address: ResourceAddress,
-        /// Vault where collateral claim tokens are stored
-        cct_vault: Vault,
-        /// Vault where bonded tokens are stored
-        bt_vault: Vault,
-        /// Duration of the maturity of the option
-        duration: i64
+        duration: i64, 
+        mint_badge_address: ResourceAddress,
+        cctoken_a_address: ResourceAddress,
+        cctoken_b_address: ResourceAddress,
+        bonded_token_address: ResourceAddress,
+        token_a_vault: Vault,
+        token_b_vault: Vault
     }
 
+    /// strike rate should be in the amm function
+
     impl ConstantSumOption {
-        pub fn instantiate_option(token_a_resource_address: ResourceAddress, token_b_resource_address: ResourceAddress,
-        input_token: Bucket, token_name: String, token_symbol: String, strike_price: Decimal, duration: i64)
-        -> (ConstantSumOptionComponent, Bucket, Bucket) {
+        pub fn instantiate_option(token_a_address: ResourceAddress, token_a_name: String, token_a_symbol: String, token_b_address: ResourceAddress,
+        token_b_name: String, token_b_symbol: String, strike_price: Decimal, duration: i64) -> ConstantSumOptionComponent {
             
-            assert!(!input_token.is_empty(), "No tokens have been deposited");
+            assert!(token_a_address == token_b_address, "Pool cant have same token");
 
-            assert!(token_a_resource_address == input_token.resource_address() ||
-                    token_b_resource_address == input_token.resource_address(), "Wrong token provided");
-
-            let mint_badge: Bucket = ResourceBuilder::new_fungible()
-                .metadata("Name", "Mint Badge")
+            let mint_badge_address: ResourceAddress= ResourceBuilder::new_fungible()
+                .metadata("Name", "LP Mint Badge")
                 .divisibility(DIVISIBILITY_NONE)
-                .mint_initial_supply(1);
+                .create_with_no_initial_supply();
 
-            let cc_token: Bucket;
-
-            let cctoken_a: Bucket = ResourceBuilder::new_fungible()
-                .metadata("Name", token_name)
-                .metadata("Symbol", token_symbol)
-                .mintable(rule!(require(mint_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(mint_badge.resource_address())), LOCKED)
+            let cctoken_a_address: ResourceAddress = ResourceBuilder::new_fungible()
+                .metadata("Name", token_a_name)
+                .metadata("Symbol", token_a_symbol)
+                .mintable(rule!(require(mint_badge_address)), LOCKED)
+                .burnable(rule!(require(mint_badge_address)), LOCKED)
                 .divisibility(DIVISIBILITY_MAXIMUM)
-                .mint_initial_supply(strike_price * input_token.amount());
+                .create_with_no_initial_supply();
 
-            let cctoken_b: Bucket = ResourceBuilder::new_fungible()
-                .metadata("Name", "token_name")
-                .metadata("Symbol", "token_symbol")
-                .mintable(rule!(require(mint_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(mint_badge.resource_address())), LOCKED)
+            let cctoken_b_address: ResourceAddress = ResourceBuilder::new_fungible()
+                .metadata("Name", token_b_name)
+                .metadata("Symbol", token_b_symbol)
+                .mintable(rule!(require(mint_badge_address)), LOCKED)
+                .burnable(rule!(require(mint_badge_address)), LOCKED)
                 .divisibility(DIVISIBILITY_MAXIMUM)
-                .mint_initial_supply(strike_price * input_token.amount());
+                .create_with_no_initial_supply();
             
-            /// Checking whether the token deposited is token_a or token_b
-            if input_token.resource_address() == token_a_resource_address {cc_token = cctoken_a;}
-            else {cc_token = cctoken_b;}
-            
-            let bonded_token: Bucket = ResourceBuilder::new_fungible()
+            let bonded_token_address: ResourceAddress = ResourceBuilder::new_fungible()
                 .metadata("Name", "Bond Token")
                 .metadata("Symbol", "BT")
-                .mintable(rule!(require(mint_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(mint_badge.resource_address())), LOCKED)
+                .mintable(rule!(require(mint_badge_address)), LOCKED)
+                .burnable(rule!(require(mint_badge_address)), LOCKED)
                 .divisibility(DIVISIBILITY_MAXIMUM)
-                .mint_initial_supply(input_token.amount() / strike_price);
+                .create_with_no_initial_supply();
 
-            /// Setting the maturity of the options contract 
-            assert!(Clock::current_time_is_at_or_before(Instant::new(duration), TimePrecision::Minute) == true, "Maturity of the pool is over");
+             
+            if Clock::current_time_is_at_or_before(Instant::new(duration), TimePrecision::Minute) == true 
+            {panic!("Maturity of the pool is over")}; 
 
             let option_implementation: ConstantSumOptionComponent = Self {
-                lock_token_vault: Vault::with_bucket(input_token),
                 strike_price: strike_price,
-                mint_badge_vault: Vault::with_bucket(mint_badge),
-                bt_address: bonded_token.resource_address(),
-                cct_vault: Vault::new(cc_token.resource_address()),
-                bt_vault: Vault::new(bonded_token.resource_address()),
                 duration: duration,
+                mint_badge_address,
+                cctoken_a_address,
+                cctoken_b_address,
+                bonded_token_address,
+                token_a_vault: Vault::new(token_a_address),
+                token_b_vault: Vault::new(token_b_address),
             }
             .instantiate();
-            (option_implementation, cc_token, bonded_token)
+
+            return option_implementation
             
         }
 
-        pub fn show_balance(&self) {
-            self.lock_token_vault.amount();
+         pub fn new_lend_user(&self) -> Bucket {
+            ResourceBuilder::new_fungible()
+                .metadata("Name", "User Badge of lending")
+                .divisibility(DIVISIBILITY_MAXIMUM)
+                .mint_initial_supply(1)
         }
 
-        /// method for lending token 
-        pub fn lend_tokens(&mut self, input_lend_token: Bucket, bt_interest: Decimal) -> (Bucket, Bucket) {
-            if input_lend_token.resource_address() == self.lock_token_vault.resource_address() {
-                let bt_manager = borrow_resource_manager!(self.bt_address);
-                let bt: Bucket = self.mint_badge_vault.authorize(|| bt_manager.mint(input_lend_token.amount()));
-                let interest_bt: Bucket = self.mint_badge_vault.authorize(|| bt_manager.mint(bt_interest));
+        pub fn option_a(&mut self, lock_token: Bucket) -> (Bucket, Bucket, Bucket) {
+            assert!(lock_token.resource_address() == self.token_a_vault.resource_address(), "Wrong token provided");
+            let lock_token_amount = lock_token.amount();
+            let mint_badge: Bucket = borrow_resource_manager!(self.mint_badge_address).mint(1);
 
-                return (bt, interest_bt)
-            }
-            else {panic!("The provided token doesnt have an Amm pool")}
+            self.token_a_vault.put(lock_token);
+
+            let cctoken_a: Bucket = borrow_resource_manager!(self.cctoken_a_address).mint(lock_token_amount);
+            let bonded_token_a: Bucket = borrow_resource_manager!(self.bonded_token_address).mint(lock_token_amount);
+            return (mint_badge, cctoken_a, bonded_token_a);
         }
 
-        /// method for borrowing tokens
-        pub fn borrow_tokens(&mut self, input_collateral: Bucket, cct_interest: Decimal) -> (Bucket, Bucket) {
-            if input_collateral.resource_address() == self.lock_token_vault.resource_address() {
-                let cct_manager = borrow_resource_manager!(self.cct_vault.resource_address());
-                let cct: Bucket = self.mint_badge_vault.authorize(|| cct_manager.mint(input_collateral.amount()));
-                let interest_cct : Bucket = self.mint_badge_vault.authorize(|| cct_manager.mint(cct_interest));
+        pub fn option_b(&mut self, lock_token: Bucket) -> (Bucket, Bucket, Bucket) {
+            assert!(lock_token.resource_address() == self.token_b_vault.resource_address(), "Wrong token provided");
+            let lock_token_amount = lock_token.amount();
+            let mint_badge: Bucket = borrow_resource_manager!(self.mint_badge_address).mint(1);
 
-                return (cct, interest_cct)
-            }
-            else {panic!("The provided token doesnt have an Amm pool")}
-        }
+            self.token_b_vault.put(lock_token);
 
-        
+            let cctoken_b: Bucket = borrow_resource_manager!(self.cctoken_b_address).mint(lock_token_amount);
+            let bonded_token_b: Bucket = borrow_resource_manager!(self.bonded_token_address).mint(lock_token_amount);
+            return (mint_badge, cctoken_b, bonded_token_b);
+        }                
     }
 }
