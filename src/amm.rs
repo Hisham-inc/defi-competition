@@ -1,94 +1,74 @@
 use scrypto::prelude::*;
 
-/// Trying to do a cross-blueprint call, but have no idea
-external_blueprint! {
-    ConstantSumOption {
-        fn instantiate_option(token_a_resource_address: ResourceAddress, token_b_resource_address: ResourceAddress,
-            input_token: Bucket, token_name: String, token_symbol: String, strike_price: Decimal, duration: i64) -> (ConstantSumOptionComponent, Bucket, Bucket);
-    }
+#[derive(ScryptoCategorize, ScryptoEncode, ScryptoDecode, LegacyDescribe)]
+pub(crate) struct ConstantSumAmm {
+    cct_a: Vault,
+    cct_b: Vault,
+    bt_per_second: Vault,
+    duraton: i64,
+    lp_admin_badge_vault: Vault,
+    fee: Decimal,
+    lp_resource_address: ResourceAddress,
+    strike_price: Decimal,
 }
 
-external_component! {
-    ConstantSumOptionComponent  {
-        fn lend_tokens(&mut self, input_lend_token: Bucket, interest: Decimal) -> (Bucket, Bucket);
-        fn borrow_tokens(&mut self, input_collateral: Bucket, cct_interest: Decimal) -> (Bucket, Bucket);
-        fn show_balance(&self);
-    }
-}
+impl ConstantSumAmm {
+    pub fn instantiate_amm_pool(cctoken_a_address: ResourceAddress, cctoken_b_address: ResourceAddress,
+    strike_price: Decimal, bonded_token_address: ResourceAddress, duration: i64, fee: Decimal, lp_initial_supply: Decimal, lp_name: String,
+    lp_symbol: String) -> ConstantSumAmm {
+        
+        assert!(fee < dec!(0) && fee > dec!(1), "Fee is invalid");
 
+        let lp_admin_badge: Bucket = ResourceBuilder::new_fungible()
+            .metadata("Name", "Liquidity Provider Admin badge")
+            .metadata("Usage", "Needed to mint LP tokens")
+            .divisibility(DIVISIBILITY_NONE)
+            .mint_initial_supply(1);
 
-#[blueprint]
-mod constant_sum_amm {
+        let lp_resource_address = ResourceBuilder::new_fungible()
+            .metadata("Name", lp_name)
+            .metadata("Symbol", lp_symbol)
+            .divisibility(DIVISIBILITY_MAXIMUM)
+            .mintable(rule!(require(lp_admin_badge.resource_address())), LOCKED)
+            .burnable(rule!(require(lp_admin_badge.resource_address())), LOCKED)
+            .create_with_no_initial_supply();
 
-    struct ConstantSumAmm {
-        /// Vault used to store first collateral-claim token which is minted through options  
-        cct_a: Vault,
-        /// Vault used to store second collateral-claim token which is minted through options 
-        cct_b: Vault,
-        /// Vault used to store bonded token which is minted through options 
-        bt_per_second: Vault,
-        /// Time for the maturity of amm
-        duraton: i64,
-        /// Vault for storing admin_badge
-        lp_admin_badge_vault: Vault,
-        /// swap fees
-        fee: Decimal,
-        /// LP token resource address
-        lp_resource_address: ResourceAddress,
-    }
+        let lp_token = lp_admin_badge.authorize(|| {
+            borrow_resource_manager!(lp_resource_address).mint(lp_initial_supply)
+        });
 
-    impl ConstantSumAmm {
-        pub fn instantiate_amm_pool(cctoken_a: Bucket, cctoken_b: Bucket, _strike_price: Decimal, bt_per_second: Bucket,
-        duration: i64, fee: Decimal, lp_initial_supply: Decimal,lp_name: String, lp_symbol: String) -> (ConstantSumAmmComponent, Bucket){
-            
-            if strike_price >= dec!(1) {cctoken_b.amount() == cctoken_b.amount() / strike_price;}
-            else {cctoken_a.amount() == strike_price * cctoken_a.amount();}
+        let selfref = Self {
+            cct_a: Vault::new(cctoken_a_address),
+            cct_b: Vault::new(cctoken_b_address),
+            bt_per_second: Vault::new(bonded_token_address),
+            duraton: duration,
+            lp_admin_badge_vault: Vault::with_bucket(lp_admin_badge),
+            fee,
+            lp_resource_address,
+            strike_price,
+        };
 
-            assert!(fee < dec!(0) && fee > dec!(1), "Fee is invalid");
-            
-            let constant_product: Decimal = (cctoken_a.amount() + cctoken_b.amount()) * bt_per_second.amount();
-            let _sqrt_constant_product: Decimal = constant_product.powi(1/2);
+        return selfref
 
-            // l is the marginal interest rate per second of bond token per total collateral claim tokens
-            let _l: Decimal = bt_per_second.amount() / (cctoken_a.amount() + cctoken_b.amount());
-            
-            // admin badge used for minting and burning LP tokens
-            let lp_admin_badge: Bucket = ResourceBuilder::new_fungible()
-                .metadata("Name", "Liquidity Provider Admin badge")
-                .metadata("Usage", "Needed to mint LP tokens")
-                .divisibility(DIVISIBILITY_NONE)
-                .mint_initial_supply(1);
+    } 
 
-            let lp_resource_address = ResourceBuilder::new_fungible()
-                .metadata("Name", lp_name)
-                .metadata("Symbol", lp_symbol)
-                .divisibility(DIVISIBILITY_MAXIMUM)
-                .mintable(rule!(require(lp_admin_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(lp_admin_badge.resource_address())), LOCKED)
-                .create_with_no_initial_supply();
+       /*pub fn add_liquidity_token_a(&mut self, mut cctoken_a: Bucket, mut bond_token: Bucket) {
+            assert!(cctoken_a.resource_address() == self.cct_a.resource_address(), "Wrong collateral-claim token provided");
+            assert!(bond_token.resource_address() == self.bt_per_second.resource_address(), "Wrong bond token provided");
+            let lp_resource_manager = borrow_resource_manager!(self.lp_resource_address);
+        } */
 
-            let lp_token = lp_admin_badge.authorize(|| {
-                borrow_resource_manager!(lp_resource_address).mint(lp_initial_supply)
-            });
+    /*pub fn rebalance_function(&mut self, input_token: Bucket, spot_price: Decimal) {
+        if spot_price > self.strike_price {
+            assert!(input_token.resource_address() == self.cct_b.resource_address(), "Wrong token provided");
+            let amount = input_token.amount();
+                // Actually input_token should be put into cctoken_a vault in the option.rs file
+            self.cct_b.put(input_token);
 
-            let constant_sum_amm: ConstantSumAmmComponent = Self {
-                cct_a: Vault::with_bucket(cctoken_a),
-                cct_b: Vault::with_bucket(cctoken_b),
-                bt_per_second: Vault::with_bucket(bt_per_second),
-                duraton: duration,
-                lp_admin_badge_vault: Vault::with_bucket(lp_admin_badge),
-                fee: fee,
-                lp_resource_address,
-            }
-            .instantiate();
+            self.cct_a.take(amount / self.strike_price);
 
-            (constant_sum_amm, lp_token)
-
-        } 
-
-        pub fn show_bal(&self) {
-            self.cct_a.amount();
-            self.cct_b.amount();
         }
-    }
+    }*/
+
 }
+
