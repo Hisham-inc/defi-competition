@@ -1,4 +1,3 @@
-use crate::amm::ConstantSumAmm;
 use scrypto::radix_engine_interface::time::*;
 use scrypto::prelude::*;
 
@@ -12,15 +11,14 @@ mod option_implementation {
         bonded_token_address: ResourceAddress,
         token_a_vault: Vault,
         token_b_vault: Vault,
-        constant_sum_amm: ConstantSumAmm,
-        strike_price: Decimal
+        strike_rate: Decimal
     }
 
     /// strike rate should be in the amm function
 
     impl ConstantSumOption {
         pub fn instantiate_option(token_a_address: ResourceAddress, token_a_name: String, token_a_symbol: String, token_b_address: ResourceAddress,
-        token_b_name: String, token_b_symbol: String, strike_price: Decimal, duration: i64) -> ComponentAddress {
+        token_b_name: String, token_b_symbol: String, strike_rate: Decimal, duration: i64) -> ComponentAddress {
             
             assert!(token_a_address != token_b_address, "Pool cant have same token");
 
@@ -55,12 +53,8 @@ mod option_implementation {
                 .divisibility(DIVISIBILITY_MAXIMUM)
                 .create_with_no_initial_supply();
 
-             
             assert!(Clock::current_time_is_at_or_before(Instant::new(duration), TimePrecision::Minute), "Maturity of the pool is over");
 
-            let constant_sum_amm: ConstantSumAmm = ConstantSumAmm::instantiate_amm_pool(
-                cctoken_a_address, cctoken_b_address, strike_price, bonded_token_address,
-                duration, dec!("0.5"), dec!(1000), "LPName".into(), "LPSym".into()); 
 
             let option_implementation: ConstantSumOptionComponent = Self {
                 duration: duration,
@@ -70,23 +64,20 @@ mod option_implementation {
                 bonded_token_address,
                 token_a_vault: Vault::new(token_a_address),
                 token_b_vault: Vault::new(token_b_address),
-                strike_price,
-                constant_sum_amm
+                strike_rate
             }
-            .instantiate();
-
-            option_implementation.globalize()
-            
+            .instantiate()
+            .globalize();
         }
 
-         pub fn new_lend_user(&self) -> Bucket {
+        /*  pub fn new_lend_user(&self) -> Bucket {
             ResourceBuilder::new_fungible()
                 .metadata("Name", "User Badge of lending")
                 .divisibility(DIVISIBILITY_MAXIMUM)
                 .mint_initial_supply(1)
-        }
+        } */
 
-        pub fn option_a(&mut self, lock_token: Bucket) -> (Bucket, Bucket) {
+        pub fn option_a_deposit(&mut self, lock_token: Bucket) -> (Bucket, Bucket) {
             assert!(lock_token.resource_address() == self.token_a_vault.resource_address(), "Wrong token provided");
             let lock_token_amount = lock_token.amount();
 
@@ -101,7 +92,25 @@ mod option_implementation {
             return (cctoken_a, bonded_token_a);
         }
 
-        pub fn option_b(&mut self, lock_token: Bucket) -> (Bucket, Bucket) {
+        pub fn option_a_withdraw(&mut self, unlock_token: Bucket, cctoken_a: Bucket, bonded_token: Bucket) -> Bucket {
+            assert!(cctoken_a.resource_address() == self.cctoken_a_address &&
+            bonded_token.resource_address() == self.bonded_token_address, "Wrong tokens provided");
+            assert!(unlock_token.resource_address() == self.token_a_vault.resource_address(), "Wrong token provided");
+            let unlock_token_amount = unlock_token.amount();
+            
+            self.mint_badge_vault.authorize(|| {
+                borrow_resource_manager!(self.cctoken_a_address).burn(cctoken_a)
+            });
+
+            self.mint_badge_vault.authorize(|| {
+                borrow_resource_manager!(self.bonded_token_address).burn(bonded_token)
+            });
+
+            let output_token: Bucket = self.token_a_vault.take(unlock_token_amount);
+            return output_token;
+        }
+
+        pub fn option_b_deposit(&mut self, lock_token: Bucket) -> (Bucket, Bucket) {
             assert!(lock_token.resource_address() == self.token_b_vault.resource_address(), "Wrong token provided");
             let lock_token_amount = lock_token.amount();
 
@@ -114,6 +123,25 @@ mod option_implementation {
                 borrow_resource_manager!(self.bonded_token_address).mint(lock_token_amount)
             });
             return (cctoken_b, bonded_token_b);
-        }                
+        }       
+
+        pub fn option_b_withdraw(&mut self, unlock_token: Bucket, cctoken_b: Bucket, bonded_token: Bucket) -> Bucket {
+            assert!(cctoken_b.resource_address() == self.cctoken_b_address &&
+            bonded_token.resource_address() == self.bonded_token_address, "Wrong tokens provided");
+            assert!(unlock_token.resource_address() == self.token_b_vault.resource_address(), "Wrong token provided");
+            let unlock_token_amount = unlock_token.amount();
+            
+            self.mint_badge_vault.authorize(|| {
+                borrow_resource_manager!(self.cctoken_b_address).burn(cctoken_b)
+            });
+
+            self.mint_badge_vault.authorize(|| {
+                borrow_resource_manager!(self.bonded_token_address).burn(bonded_token)
+            });
+
+            let output_token: Bucket = self.token_b_vault.take(unlock_token_amount);
+            return output_token;
+        }     
+            
     }
 }
