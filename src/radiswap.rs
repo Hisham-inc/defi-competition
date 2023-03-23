@@ -1,38 +1,32 @@
 use scrypto::prelude::*;
 
 #[blueprint]
-mod radiswap {
+mod radiswap_module {
     struct Radiswap {
-        /// The resource address of LP token.
-        lp_resource_address: ResourceAddress,
-        /// LP tokens mint badge.
-        lp_mint_badge: Vault,
-        /// The reserve for token A.
-        a_pool: Vault,
-        /// The reserve for token B.
-        b_pool: Vault,
-        /// The fee to apply for every swap
+        /// A vault containing pool reverses of reserves of token A.
+        vault_a: Vault,
+        /// A vault containing pool reverses of reserves of token B.
+        vault_b: Vault,
+        /// The token address of a token representing pool units in this pool
+        pool_units_resource_address: ResourceAddress,
+        /// A vault containing a badge which has the authority to mint `pool_units` 
+        /// tokens.
+        pool_units_minter_badge: Vault,
+        /// The amount of fees imposed by the pool on swaps where 0 <= fee <= 1.
         fee: Decimal,
-        /// The standard (Uniswap-like) DEX follows the X*Y=K rule. Since we enable a user defined 'lp_initial_supply', we need to store this value to recover incase all liquidity is removed from the system.
-        /// Adding and removing liquidity does not change this ratio, this ratio is only changed upon swaps.
-        lp_per_asset_ratio: Decimal,
     }
 
     impl Radiswap {
-        /// Creates a Radiswap component for token pair A/B and returns the component address
-        /// along with the initial LP tokens.
-        pub fn instantiate_pool(
-            a_tokens: Bucket,
-            b_tokens: Bucket,
-            lp_initial_supply: Decimal,
-            lp_symbol: String,
-            lp_name: String,
-            lp_url: String,
+        /// Creates a new liquidity pool of the two tokens sent to the pool
+        pub fn instantiate_radiswap(
+            bucket_a: Bucket,
+            bucket_b: Bucket,
             fee: Decimal,
         ) -> (ComponentAddress, Bucket) {
-            // Check arguments
+            // Ensure that none of the buckets are empty and that an appropriate 
+            // fee is set.
             assert!(
-                !a_tokens.is_empty() && !b_tokens.is_empty(),
+                !bucket_a.is_empty() && !bucket_b.is_empty(),
                 "You must pass in an initial supply of each token"
             );
             assert!(
@@ -40,169 +34,166 @@ mod radiswap {
                 "Invalid fee in thousandths"
             );
 
-            // Instantiate our LP token and mint an initial supply of them
-            let lp_mint_badge = ResourceBuilder::new_fungible()
+            // Create a badge which will be given the authority to mint the pool  
+            // unit tokens.
+            let pool_units_minter_badge: Bucket = ResourceBuilder::new_fungible()
                 .divisibility(DIVISIBILITY_NONE)
                 .metadata("name", "LP Token Mint Auth")
                 .mint_initial_supply(1);
-            let lp_resource_address = ResourceBuilder::new_fungible()
+
+            // Create the pool units token along with the initial supply specified  
+            // by the user.
+            let pool_units: Bucket = ResourceBuilder::new_fungible()
                 .divisibility(DIVISIBILITY_MAXIMUM)
-                .metadata("symbol", lp_symbol)
-                .metadata("name", lp_name)
-                .metadata("url", lp_url)
-                .mintable(rule!(require(lp_mint_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(lp_mint_badge.resource_address())), LOCKED)
-                .create_with_no_initial_supply();
+                .metadata("name", "Pool Unit")
+                .metadata("symbol", "UNIT")
+                .mintable(
+                    rule!(require(pool_units_minter_badge.resource_address())),
+                    LOCKED,
+                )
+                .burnable(
+                    rule!(require(pool_units_minter_badge.resource_address())),
+                    LOCKED,
+                )
+                .mint_initial_supply(100);
 
-            let lp_tokens = lp_mint_badge.authorize(|| {
-                borrow_resource_manager!(lp_resource_address).mint(lp_initial_supply)
-            });
-
-            // ratio = initial supply / (x * y) = initial supply / k
-            let lp_per_asset_ratio = lp_initial_supply / (a_tokens.amount() * b_tokens.amount());
-
-            // Instantiate our Radiswap component
-            let radiswap = Self {
-                lp_resource_address,
-                lp_mint_badge: Vault::with_bucket(lp_mint_badge),
-                a_pool: Vault::with_bucket(a_tokens),
-                b_pool: Vault::with_bucket(b_tokens),
-                fee,
-                lp_per_asset_ratio,
+            // Create the Radiswap component and globalize it
+            let radiswap: ComponentAddress = Self {
+                vault_a: Vault::with_bucket(bucket_a),
+                vault_b: Vault::with_bucket(bucket_b),
+                pool_units_resource_address: pool_units.resource_address(),
+                pool_units_minter_badge: Vault::with_bucket(pool_units_minter_badge),
+                fee: fee,
             }
             .instantiate()
             .globalize();
 
-            // Return the new Radiswap component, as well as the initial supply of LP tokens
-            (radiswap, lp_tokens)
-        }
-
-        /// Adds liquidity to this pool and return the LP tokens representing pool shares
-        /// along with any remainder.
-        pub fn add_liquidity(
-            &mut self,
-            mut a_tokens: Bucket,
-            mut b_tokens: Bucket,
-        ) -> (Bucket, Bucket) {
-            // Get the resource manager of the lp tokens
-            let lp_resource_manager = borrow_resource_manager!(self.lp_resource_address);
-
-            // Differentiate LP calculation based on whether pool is empty or not.
-            let (supply_to_mint, remainder) = if lp_resource_manager.total_supply() == 0.into() {
-                // Set initial LP tokens based on previous LP per K ratio.
-                let supply_to_mint =
-                    self.lp_per_asset_ratio * a_tokens.amount() * b_tokens.amount();
-                self.a_pool.put(a_tokens.take(a_tokens.amount()));
-                self.b_pool.put(b_tokens);
-                (supply_to_mint, a_tokens)
-            } else {
-                // The ratio of added liquidity in existing liquidty.
-                let a_ratio = a_tokens.amount() / self.a_pool.amount();
-                let b_ratio = b_tokens.amount() / self.b_pool.amount();
-
-                let (actual_ratio, remainder) = if a_ratio <= b_ratio {
-                    // We will claim all input token A's, and only the correct amount of token B
-                    self.a_pool.put(a_tokens);
-                    self.b_pool
-                        .put(b_tokens.take(self.b_pool.amount() * a_ratio));
-                    (a_ratio, b_tokens)
-                } else {
-                    // We will claim all input token B's, and only the correct amount of token A
-                    self.b_pool.put(b_tokens);
-                    self.a_pool
-                        .put(a_tokens.take(self.a_pool.amount() * b_ratio));
-                    (b_ratio, a_tokens)
-                };
-                (lp_resource_manager.total_supply() * actual_ratio, remainder)
-            };
-
-            // Mint LP tokens according to the share the provider is contributing
-            let lp_tokens = self
-                .lp_mint_badge
-                .authorize(|| lp_resource_manager.mint(supply_to_mint));
-
-            // Return the LP tokens along with any remainder
-            (lp_tokens, remainder)
-        }
-
-        /// Removes liquidity from this pool.
-        pub fn remove_liquidity(&mut self, lp_tokens: Bucket) -> (Bucket, Bucket) {
-            assert!(
-                self.lp_resource_address == lp_tokens.resource_address(),
-                "Wrong token type passed in"
-            );
-
-            // Get the resource manager of the lp tokens
-            let lp_resource_manager = borrow_resource_manager!(self.lp_resource_address);
-
-            // Calculate the share based on the input LP tokens.
-            let share = lp_tokens.amount() / lp_resource_manager.total_supply();
-
-            // Withdraw the correct amounts of tokens A and B from reserves
-            let a_withdrawn = self.a_pool.take(self.a_pool.amount() * share);
-            let b_withdrawn = self.b_pool.take(self.b_pool.amount() * share);
-
-            // Burn the LP tokens received
-            self.lp_mint_badge.authorize(|| {
-                lp_tokens.burn();
-            });
-
-            // Return the withdrawn tokens
-            (a_withdrawn, b_withdrawn)
+            // Return the component address as well as the pool units tokens
+            (radiswap, pool_units)
         }
 
         /// Swaps token A for B, or vice versa.
         pub fn swap(&mut self, input_tokens: Bucket) -> Bucket {
-            // Get the resource manager of the lp tokens
-            let lp_resource_manager = borrow_resource_manager!(self.lp_resource_address);
+            // Getting the vault corresponding to the input tokens and the vault 
+            // corresponding to the output tokens based on what the input is.
+            let (input_tokens_vault, output_tokens_vault): (&mut Vault, &mut Vault) =
+                if input_tokens.resource_address() == 
+                self.vault_a.resource_address() {
+                    (&mut self.vault_a, &mut self.vault_b)
+                } else if input_tokens.resource_address() == 
+                self.vault_b.resource_address() {
+                    (&mut self.vault_b, &mut self.vault_a)
+                } else {
+                    panic!(
+                    "The given input tokens do not belong to this liquidity pool"
+                    )
+                };
 
-            // Calculate the swap fee
-            let fee_amount = input_tokens.amount() * self.fee;
+            // Calculate the output amount of tokens based on the input amount 
+            // and the pool fees
+            let output_amount: Decimal = (output_tokens_vault.amount()
+                * (dec!("1") - self.fee)
+                * input_tokens.amount())
+                / (input_tokens_vault.amount() + input_tokens.amount() 
+                * (dec!("1") - self.fee));
 
-            let output_tokens = if input_tokens.resource_address() == self.a_pool.resource_address()
+            // Perform the swapping operation
+            input_tokens_vault.put(input_tokens);
+            output_tokens_vault.take(output_amount)
+        }
+        
+        /// Adds liquidity to the liquidity pool
+        pub fn add_liquidity(
+            &mut self,
+            bucket_a: Bucket,
+            bucket_b: Bucket,
+        ) -> (Bucket, Bucket, Bucket) {
+            // Give the buckets the same names as the vaults
+            let (mut bucket_a, mut bucket_b): (Bucket, Bucket) = 
+            if bucket_a.resource_address()
+                == self.vault_a.resource_address()
+                && bucket_b.resource_address() == self.vault_b.resource_address()
             {
-                // Calculate how much of token B we will return
-                let b_amount = self.b_pool.amount()
-                    - self.a_pool.amount() * self.b_pool.amount()
-                        / (input_tokens.amount() - fee_amount + self.a_pool.amount());
-
-                // Put the input tokens into our pool
-                self.a_pool.put(input_tokens);
-
-                // Return the tokens owed
-                self.b_pool.take(b_amount)
+                (bucket_a, bucket_b)
+            } else if bucket_a.resource_address() == self.vault_b.resource_address()
+                && bucket_b.resource_address() == self.vault_a.resource_address()
+            {
+                (bucket_b, bucket_a)
             } else {
-                // Calculate how much of token A we will return
-                let a_amount = self.a_pool.amount()
-                    - self.a_pool.amount() * self.b_pool.amount()
-                        / (input_tokens.amount() - fee_amount + self.b_pool.amount());
-
-                // Put the input tokens into our pool
-                self.b_pool.put(input_tokens);
-
-                // Return the tokens owed
-                self.a_pool.take(a_amount)
+                panic!("One of the tokens does not belong to the pool!")
             };
 
-            // Accrued fees change the raio
-            self.lp_per_asset_ratio =
-                lp_resource_manager.total_supply() / (self.a_pool.amount() * self.b_pool.amount());
+            // Getting the values of `dm` and `dn` based on the sorted buckets
+            let dm: Decimal = bucket_a.amount();
+            let dn: Decimal = bucket_b.amount();
 
-            output_tokens
+            // Getting the values of m and n from the liquidity pool vaults
+            let m: Decimal = self.vault_a.amount();
+            let n: Decimal = self.vault_b.amount();
+
+            // Calculate the amount of tokens which will be added to each one of 
+            //the vaults
+            let (amount_a, amount_b): (Decimal, Decimal) =
+                if ((m == Decimal::zero()) | (n == Decimal::zero())) 
+                    | ((m / n) == (dm / dn)) 
+                {
+                    // Case 1
+                    (dm, dn)
+                } else if (m / n) < (dm / dn) {
+                    // Case 2
+                    (dn * m / n, dn)
+                } else {
+                    // Case 3
+                    (dm, dm * n / m)
+                };
+
+            // Depositing the amount of tokens calculated into the liquidity pool
+            self.vault_a.put(bucket_a.take(amount_a));
+            self.vault_b.put(bucket_b.take(amount_b));
+
+            // Mint pool units tokens to the liquidity provider
+            let pool_units_manager: &mut ResourceManager =
+                borrow_resource_manager!(self.pool_units_resource_address);
+            let pool_units_amount: Decimal =
+                if pool_units_manager.total_supply() == Decimal::zero() {
+                    dec!("100.00")
+                } else {
+                    amount_a * pool_units_manager.total_supply() / m
+                };
+            let pool_units: Bucket = self
+                .pool_units_minter_badge
+                .authorize(|| pool_units_manager.mint(pool_units_amount));
+
+            // Return the remaining tokens to the caller as well as the pool units 
+            // tokens
+            (bucket_a, bucket_b, pool_units)
         }
 
-        /// Returns the resource addresses of the pair.
-        pub fn get_pair(&self) -> (ResourceAddress, ResourceAddress) {
+        /// Removes the amount of funds from the pool corresponding to the pool units.
+        pub fn remove_liquidity(&mut self, pool_units: Bucket) -> (Bucket, Bucket) {
+            assert!(
+                pool_units.resource_address() == self.pool_units_resource_address,
+                "Wrong token type passed in"
+            );
+
+            // Get the resource manager of the lp tokens
+            let pool_units_resource_manager: &ResourceManager =
+                borrow_resource_manager!(self.pool_units_resource_address);
+
+            // Calculate the share based on the input LP tokens.
+            let share = pool_units.amount() / 
+                pool_units_resource_manager.total_supply();
+
+            // Burn the LP tokens received
+            self.pool_units_minter_badge.authorize(|| {
+                pool_units.burn();
+            });
+
+            // Return the withdrawn tokens
             (
-                self.a_pool.resource_address(),
-                self.b_pool.resource_address(),
+                self.vault_a.take(self.vault_a.amount() * share),
+                self.vault_b.take(self.vault_b.amount() * share),
             )
         }
-
-        pub fn get_price(&self) -> (Decimal, Decimal) {
-            let token_a_price =  self.b_pool.amount() / self.a_pool.amount();
-            let token_b_price = self.a_pool.amount() / self.b_pool.amount();
-            (token_a_price, token_b_price)
-        } 
     }
 }
