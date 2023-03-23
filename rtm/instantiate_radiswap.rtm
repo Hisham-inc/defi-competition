@@ -1,0 +1,33 @@
+CALL_METHOD
+    ComponentAddress("component_sim1qgehpqdhhr62xh76wh6gppnyn88a0uau68epljprvj3sxknsqr")
+    "lock_fee"
+    Decimal("100");
+CALL_METHOD
+    ComponentAddress("account_sim1q0w5razy99dnnsxesmls0xzuy49ac0jss35zdp3echkqyewc5x")
+    "withdraw_by_amount"
+    Decimal("10")
+    ResourceAddress("resource_sim1qzl0qx5es4ttm6zyhghxvu2c7sckkr9r8ufw94f5t5ysu056gn");
+TAKE_FROM_WORKTOP_BY_AMOUNT
+    Decimal("10")
+    ResourceAddress("resource_sim1qzl0qx5es4ttm6zyhghxvu2c7sckkr9r8ufw94f5t5ysu056gn")
+    Bucket("bucket1");
+CALL_METHOD
+    ComponentAddress("account_sim1q0w5razy99dnnsxesmls0xzuy49ac0jss35zdp3echkqyewc5x")
+    "withdraw_by_amount"
+    Decimal("100000")
+    ResourceAddress("resource_sim1qpfufqthlcegxphuswygt7a2627fc65fsjjgcp0maapqz75rfl");
+TAKE_FROM_WORKTOP_BY_AMOUNT
+    Decimal("100000")
+    ResourceAddress("resource_sim1qpfufqthlcegxphuswygt7a2627fc65fsjjgcp0maapqz75rfl")
+    Bucket("bucket2");
+CALL_FUNCTION
+    PackageAddress("package_sim1qyde4eg0gst5636psscpdj2gfl5fk2dtxw3508j44r3qynef5h")
+    "Radiswap"
+    "instantiate_radiswap"
+    Bucket("bucket1")
+    Bucket("bucket2")
+    Decimal("0.5");
+CALL_METHOD
+    ComponentAddress("account_sim1q0w5razy99dnnsxesmls0xzuy49ac0jss35zdp3echkqyewc5x")
+    "deposit_batch"
+    Expression("ENTIRE_WORKTOP");
