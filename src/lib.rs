@@ -1,12 +1,5 @@
 use scrypto::radix_engine_interface::time::*;
 use scrypto::prelude::*;
-
-// Define the functions on the Radiswap blueprint
-external_blueprint! {
-    RadiswapPackageTarget {
-      fn instantiate_pool(a_tokens: Bucket, b_tokens: Bucket, lp_initial_supply: Decimal, lp_symbol: String, lp_name: String, lp_url: String, fee: Decimal) -> (ComponentAddress, Bucket);
-    }
-}
   
   // Define the methods on instantiated components
 external_component! {
